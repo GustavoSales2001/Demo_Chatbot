@@ -411,7 +411,8 @@ class SalesChatbot {
       "com certeza",
       "yes",
       "yep",
-      "sure"
+      "sure",
+      "faria"
     ];
 
     return positives.some(word => msg.includes(word));
