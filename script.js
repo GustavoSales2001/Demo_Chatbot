@@ -1,10 +1,7 @@
 class SalesChatbot {
   constructor() {
-    this.state = "init";
+    this.state = "start";
     this.data = {
-      nome: null,
-      estaNosEUA: null,
-      processo: null, // COS | TRANSFER
       prioridade: null,
       valor: null,
       formado: null,
@@ -18,53 +15,59 @@ class SalesChatbot {
         flexibilidade: false
       },
       ofertaAceita: null,
-      querHumano: false,
-      querWhatsapp: false,
-      jaECliente: false
+
+      // NOVO BLOCO — terceiros
+      isThirdParty: null,
+      terceiroNome: null,
+      terceiroLocalizacao: null,
+      terceiroProcesso: null,
+      terceiroFamilia: null,
+      terceiroFormado: null,
+      terceiroPrioridade: null
     };
   }
 
   normalize(text) {
-    return String(text || "")
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .trim();
+    return text.toLowerCase().trim();
   }
 
   getResponse(input) {
-    const raw = String(input || "").trim();
-    const msg = this.normalize(raw);
-
-    const gatilho = this.handleImmediateTriggers(raw, msg);
-    if (gatilho) return gatilho;
-
-    if (this.state === "init") {
-      this.captureInitialContext(msg);
-
-      if (this.data.estaNosEUA && this.data.processo) {
-        this.state = "ask_prioridade";
-        return `Perfeito 👍 agora que entendi seu cenário, me diz uma coisa: hoje o que é mais importante para você?\n1. Preço\n2. Trabalho\n3. Flexibilidade`;
-      }
-
-      if (!this.data.estaNosEUA) {
-        this.state = "ask_usa";
-        return `Me diz uma coisa: você já está nos EUA?`;
-      }
-
-      if (!this.data.processo) {
-        this.state = "ask_processo";
-        return `Você já tem um visto de estudante ou precisa mudar de status?`;
-      }
-    }
+    const msg = this.normalize(input);
 
     switch (this.state) {
-      case "ask_usa":
-        return this.handleAskUSA(msg);
+      case "start":
+        this.state = "ask_self_or_third";
+        return `As informações são para você ou para outra pessoa? 😊`;
 
-      case "ask_processo":
-        return this.handleAskProcesso(msg);
+      case "ask_self_or_third":
+        return this.handleSelfOrThird(msg, input);
 
+      // NOVOS ESTADOS — TERCEIROS
+      case "thirdparty_name":
+        return this.handleThirdPartyName(input);
+
+      case "thirdparty_location":
+        return this.handleThirdPartyLocation(msg);
+
+      case "thirdparty_process":
+        return this.handleThirdPartyProcess(msg);
+
+      case "thirdparty_family":
+        return this.handleThirdPartyFamily(input);
+
+      case "thirdparty_formed":
+        return this.handleThirdPartyFormed(msg);
+
+      case "thirdparty_priority":
+        return this.handleThirdPartyPriority(msg);
+
+      case "thirdparty_contact_or_link":
+        return this.handleThirdPartyContactOrLink(msg);
+
+      case "thirdparty_closed":
+        return `Perfeito 👍 se precisar, fico por aqui.`;
+
+      // FLUXO ORIGINAL
       case "ask_prioridade":
         return this.handlePrioridade(msg);
 
@@ -102,106 +105,253 @@ class SalesChatbot {
         return `Perfeito! Parabéns pela conquista dessa bolsa 🎉\n\nAgora vou te encaminhar um link do processo seletivo para coletar algumas informações e te direcionar com mais precisão nas próximas etapas.\n\nÉ rápido e vai me ajudar a te apresentar as melhores opções de acordo com o seu perfil 👇\n\nDeixe seu contato/telefone. Qualquer esclarecimento entraremos em contato com você para quitar as suas dúvidas.`;
 
       default:
-        this.state = "init";
-        return `Vamos começar 😊 você já está nos EUA?`;
+        return `Desculpe, não entendi. Vamos recomeçar?\nDigite qualquer coisa para iniciar.`;
     }
   }
 
-  handleImmediateTriggers(raw, msg) {
-    if (msg === "ok, vamos começar!" || msg === "ok vamos começar") {
-      return `Perfeito 😊 me diz uma coisa: você já está nos EUA?`;
+  // =========================
+  // NOVO BLOCO — TERCEIROS
+  // =========================
+
+  handleSelfOrThird(msg, originalInput) {
+    if (this.isThirdPartyReference(msg)) {
+      this.data.isThirdParty = true;
+      this.state = "thirdparty_name";
+      return `Entendi 😊 você está buscando essas informações para outra pessoa, certo?\n\nQual é o nome dela(e)?`;
     }
 
-    if (this.detectJaECliente(msg)) {
-      this.data.jaECliente = true;
-      this.state = "closed";
-      return `Entendi 😊 como você já é cliente, vou te direcionar para o time responsável continuar seu atendimento.`;
-    }
-
-    if (this.detectHuman(msg)) {
-      this.data.querHumano = true;
-      this.state = "closed";
-      return `Claro 😊 vou encaminhar você para um especialista continuar o atendimento.`;
-    }
-
-    if (this.detectWhatsAppRedirect(msg)) {
-      this.data.querWhatsapp = true;
-      this.state = "closed";
-      return `Perfeito 😊 vou te direcionar para o WhatsApp agora mesmo.`;
-    }
-
-    if (this.detectWhatsAppContact(msg) || this.looksLikePhone(raw)) {
-      this.data.querWhatsapp = true;
-      this.state = "closed";
-      return `Anotei seu contato! Um especialista vai te chamar no WhatsApp em breve 😊`;
-    }
-
-    return null;
-  }
-
-  captureInitialContext(msg) {
-    if (!this.data.estaNosEUA) {
-      if (this.messageSaysInUSA(msg)) this.data.estaNosEUA = "sim";
-      if (this.messageSaysNotInUSA(msg)) this.data.estaNosEUA = "nao";
-    }
-
-    if (!this.data.processo) {
-      if (this.messageSaysTransfer(msg)) this.data.processo = "TRANSFER";
-      if (this.messageSaysCOS(msg)) this.data.processo = "COS";
-    }
-  }
-
-  handleAskUSA(msg) {
-    if (this.messageSaysInUSA(msg)) {
-      this.data.estaNosEUA = "sim";
-
-      if (!this.data.processo) {
-        this.state = "ask_processo";
-        return `Perfeito 👍 você já tem um visto de estudante ou precisa mudar de status?`;
-      }
-
+    if (
+      msg.includes("pra mim") ||
+      msg.includes("para mim") ||
+      msg.includes("sou eu") ||
+      msg.includes("é para mim") ||
+      msg.includes("pra eu") ||
+      msg.includes("para eu") ||
+      this.isPositive(msg)
+    ) {
+      this.data.isThirdParty = false;
       this.state = "ask_prioridade";
-      return `Perfeito 👍 agora me diz: hoje o que é mais importante para você?\n1. Preço\n2. Trabalho\n3. Flexibilidade`;
+      return `Perfeito 👍 Hoje, o que é mais importante para você?\n1. Preço\n2. Trabalho\n3. Flexibilidade`;
     }
 
-    if (this.messageSaysNotInUSA(msg)) {
-      this.data.estaNosEUA = "nao";
-
-      if (!this.data.processo) {
-        this.state = "ask_processo";
-        return `Entendi 👍 você já tem um visto de estudante ou precisa mudar de status?`;
-      }
-
-      this.state = "ask_prioridade";
-      return `Perfeito 👍 agora me diz: hoje o que é mais importante para você?\n1. Preço\n2. Trabalho\n3. Flexibilidade`;
-    }
-
-    return `Só para eu te direcionar certo: você já está nos EUA?`;
+    return `Só para eu te direcionar certo 😊\nAs informações são para você ou para outra pessoa?`;
   }
 
-  handleAskProcesso(msg) {
-    if (msg.includes("resident") || msg.includes("residente")) {
-      this.state = "confirm_resident";
-      return `Só pra confirmar, então você não precisa de visto correto?`;
+  handleThirdPartyName(input) {
+    const cleaned = input.trim();
+    if (!cleaned) {
+      return `Qual é o nome dela(e)?`;
     }
 
-    if (this.messageSaysTransfer(msg)) {
-      this.data.processo = "TRANSFER";
-      this.state = "ask_prioridade";
-      return `Perfeito 👍 agora me diz uma coisa: hoje o que é mais importante para você?\n1. Preço\n2. Trabalho\n3. Flexibilidade`;
-    }
-
-    if (this.messageSaysCOS(msg)) {
-      this.data.processo = "COS";
-      this.state = "ask_prioridade";
-      return `Perfeito 👍 agora me diz uma coisa: hoje o que é mais importante para você?\n1. Preço\n2. Trabalho\n3. Flexibilidade`;
-    }
-
-    return `Você já tem um visto de estudante ou precisa mudar de status?`;
+    this.data.terceiroNome = this.capitalizeName(cleaned);
+    this.state = "thirdparty_location";
+    return `Ela(e) já está nos EUA ou ainda está no Brasil?`;
   }
+
+  handleThirdPartyLocation(msg) {
+    if (this.isUsLocation(msg)) {
+      this.data.terceiroLocalizacao = "EUA";
+      this.state = "thirdparty_process";
+      return `Ela(e) já possui visto de estudante ou está pensando em fazer troca de status?`;
+    }
+
+    if (this.isBrazilOrOutsideUs(msg)) {
+      this.data.terceiroLocalizacao = "Brasil";
+      this.state = "thirdparty_process";
+      return `Ela(e) pretende ir já com visto de estudante ou ainda está avaliando?`;
+    }
+
+    return `Só para eu entender certinho 😊 ela(e) já está nos EUA ou ainda está no Brasil?`;
+  }
+
+  handleThirdPartyProcess(msg) {
+    if (
+      msg.includes("visto de estudante") ||
+      msg.includes("f1") ||
+      msg.includes("já tem visto") ||
+      msg.includes("ja tem visto") ||
+      msg.includes("já possui visto") ||
+      msg.includes("ja possui visto")
+    ) {
+      this.data.terceiroProcesso = "TRANSFER";
+    } else if (
+      msg.includes("troca de status") ||
+      msg.includes("mudar de status") ||
+      msg.includes("mudança de status") ||
+      msg.includes("mudanca de status") ||
+      msg.includes("avaliando") ||
+      msg.includes("ainda está avaliando") ||
+      msg.includes("ainda esta avaliando") ||
+      msg.includes("não tem visto") ||
+      msg.includes("nao tem visto") ||
+      msg.includes("turista") ||
+      msg.includes("b1") ||
+      msg.includes("b2")
+    ) {
+      this.data.terceiroProcesso = "COS";
+    } else {
+      this.data.terceiroProcesso = "A DEFINIR";
+    }
+
+    this.state = "thirdparty_family";
+    return `Ela(e) iria sozinha ou com família?`;
+  }
+
+  handleThirdPartyFamily(input) {
+    const msg = this.normalize(input);
+
+    if (
+      msg.includes("família") ||
+      msg.includes("familia") ||
+      msg.includes("com família") ||
+      msg.includes("com familia") ||
+      msg.includes("marido") ||
+      msg.includes("esposa") ||
+      msg.includes("filho") ||
+      msg.includes("filha")
+    ) {
+      this.data.terceiroFamilia = "com família";
+    } else if (
+      msg.includes("sozinha") ||
+      msg.includes("sozinho") ||
+      msg.includes("sozinho(a)") ||
+      msg.includes("só") ||
+      msg.includes("so")
+    ) {
+      this.data.terceiroFamilia = "sozinha";
+    } else {
+      this.data.terceiroFamilia = input.trim();
+    }
+
+    this.state = "thirdparty_formed";
+    return `Ela(e) já é formada?`;
+  }
+
+  handleThirdPartyFormed(msg) {
+    if (
+      this.isNegative(msg) ||
+      msg.includes("cursando") ||
+      msg.includes("estudando") ||
+      msg.includes("ainda não") ||
+      msg.includes("ainda nao") ||
+      msg.includes("faculdade") ||
+      msg.includes("em andamento")
+    ) {
+      this.data.terceiroFormado = "não";
+      this.state = "thirdparty_priority";
+      return `E hoje, o que pesa mais para ela(e)?\n1. Trabalho\n2. Custo\n3. Flexibilidade`;
+    }
+
+    if (
+      this.isPositive(msg) ||
+      msg.includes("formada") ||
+      msg.includes("formado") ||
+      msg.includes("já é") ||
+      msg.includes("ja e")
+    ) {
+      this.data.terceiroFormado = "sim";
+      this.state = "thirdparty_priority";
+      return `E hoje, o que pesa mais para ela(e)?\n1. Trabalho\n2. Custo\n3. Flexibilidade`;
+    }
+
+    return `Ela(e) já é formada? Responda com sim ou não.`;
+  }
+
+  handleThirdPartyPriority(msg) {
+    if (msg.includes("1") || msg.includes("trabalho")) {
+      this.data.terceiroPrioridade = "trabalho";
+    } else if (msg.includes("2") || msg.includes("custo") || msg.includes("preço") || msg.includes("preco")) {
+      this.data.terceiroPrioridade = "custo";
+    } else if (msg.includes("3") || msg.includes("flexibilidade") || msg.includes("flex")) {
+      this.data.terceiroPrioridade = "flexibilidade";
+    } else {
+      return `Me responde com uma dessas opções:\n1. Trabalho\n2. Custo\n3. Flexibilidade`;
+    }
+
+    this.state = "thirdparty_contact_or_link";
+    return `Perfeito 😊 como algumas opções dependem bastante do perfil da pessoa, o ideal é falar direto com ela(e) para orientar da forma certa.\n\nVocê prefere me passar o contato dela(e) ou encaminhar o link para ela(e)?`;
+  }
+
+  handleThirdPartyContactOrLink(msg) {
+    if (
+      msg.includes("contato") ||
+      msg.includes("número") ||
+      msg.includes("numero") ||
+      msg.includes("whatsapp") ||
+      msg.includes("vou passar") ||
+      msg.includes("te passo")
+    ) {
+      this.state = "thirdparty_closed";
+      return `Perfeito 👍 me envie o contato dela(e) e seguimos por aqui.`;
+    }
+
+    if (
+      msg.includes("link") ||
+      msg.includes("encaminhar") ||
+      msg.includes("manda") ||
+      msg.includes("pode enviar")
+    ) {
+      this.state = "thirdparty_closed";
+      return `Perfeito 👍 então você pode encaminhar o link para ela(e), e assim seguimos com as informações corretas de acordo com o perfil.`;
+    }
+
+    return `Você prefere me passar o contato dela(e) ou encaminhar o link para ela(e)?`;
+  }
+
+  isThirdPartyReference(msg) {
+    const thirdPartyWords = [
+      "irmã", "irma", "irmão", "irmao",
+      "amigo", "amiga",
+      "filho", "filha",
+      "prima", "primo",
+      "sobrinha", "sobrinho",
+      "marido", "esposa",
+      "namorado", "namorada",
+      "outra pessoa",
+      "terceiro",
+      "para ela",
+      "pra ela",
+      "para ele",
+      "pra ele"
+    ];
+
+    return thirdPartyWords.some(word => msg.includes(word));
+  }
+
+  isUsLocation(msg) {
+    const usTerms = [
+      "eua", "usa", "estados unidos",
+      "miami", "orlando", "florida", "califórnia", "california",
+      "texas", "new york", "nova york", "boston", "new jersey", "jersey"
+    ];
+
+    return usTerms.some(term => msg.includes(term));
+  }
+
+  isBrazilOrOutsideUs(msg) {
+    const nonUsTerms = [
+      "brasil", "brazil", "ainda não", "ainda nao", "não está", "nao esta",
+      "fora dos eua", "aqui no brasil"
+    ];
+
+    return nonUsTerms.some(term => msg.includes(term)) || !this.isUsLocation(msg);
+  }
+
+  capitalizeName(name) {
+    return name
+      .toLowerCase()
+      .split(" ")
+      .filter(Boolean)
+      .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ");
+  }
+
+  // =========================
+  // FLUXO ORIGINAL
+  // =========================
 
   handlePrioridade(msg) {
-    if (msg.includes("1") || msg.includes("preco") || msg.includes("preço")) {
+    if (msg.includes("1") || msg.includes("preço") || msg.includes("preco")) {
       this.data.prioridade = "preço";
       this.state = "ask_preco";
       return `Hoje essas escolas variam entre $500 e $2000 por mês.\nQual valor você se sente mais confortável investindo?`;
@@ -216,7 +366,7 @@ class SalesChatbot {
     if (msg.includes("3") || msg.includes("flexibilidade")) {
       this.data.prioridade = "flexibilidade";
       this.state = "ask_flexibilidade";
-      return `Hoje você prefere aulas:\n1. Uma vez por semana\n2. Uma vez por mês\n3. Quanto menos presencial melhor`;
+      return `Hoje você prefere aulas:\n\n1. Uma vez por semana\n\n2. Uma vez por mês\n\n3. Quanto menos presencial melhor`;
     }
 
     return `Me responde com uma dessas opções:\n1. Preço\n2. Trabalho\n3. Flexibilidade`;
@@ -242,9 +392,9 @@ class SalesChatbot {
     }
 
     if (this.isNegative(msg)) {
-      this.data.microCompromisso = "nao";
+      this.data.microCompromisso = "não";
       this.state = "hesitation";
-      return `Sem problema 😊 o que você gostaria de ajustar melhor: valor, flexibilidade ou prazo para trabalho?`;
+      return `Sem problema 😊 O que você gostaria de ajustar melhor: valor, flexibilidade ou prazo para trabalho?`;
     }
 
     return `Só para eu te direcionar certo: se eu encontrar uma opção dentro desse valor, faz sentido para você seguir?`;
@@ -255,18 +405,19 @@ class SalesChatbot {
       this.isNegative(msg) ||
       msg.includes("cursando") ||
       msg.includes("estudando") ||
-      msg.includes("ainda nao") ||
+      msg.includes("ainda não") ||
+      msg.includes("não ainda") ||
       msg.includes("nao ainda") ||
       msg.includes("faculdade") ||
       msg.includes("terminando") ||
       msg.includes("em andamento")
     ) {
-      this.data.formado = "nao";
+      this.data.formado = "não";
       this.state = "ask_trabalho_prazo_nao_formado";
       return `Boa 👍 você gostaria de começar a trabalhar em 9 meses ou em 1 ano?`;
     }
 
-    if (this.isPositive(msg) || msg.includes("ja sou") || msg.includes("formado")) {
+    if (this.isPositive(msg) || msg.includes("já sou") || msg.includes("formado")) {
       this.data.formado = "sim";
       this.state = "ask_trabalho_prazo_formado";
       return `Perfeito 👀 você gostaria de começar a trabalhar a partir do primeiro dia de aula ou depois de 9 meses?`;
@@ -299,6 +450,7 @@ class SalesChatbot {
   handlePrazoNaoFormado(msg) {
     if (
       msg.includes("antes") ||
+      msg.includes("rápido") ||
       msg.includes("rapido") ||
       msg.includes("quanto antes") ||
       msg.includes("o quanto antes")
@@ -309,6 +461,7 @@ class SalesChatbot {
     }
 
     if (
+      msg.includes("não precisa ser agora") ||
       msg.includes("nao precisa ser agora") ||
       msg.includes("pode ser depois") ||
       msg.includes("sem pressa")
@@ -330,7 +483,7 @@ class SalesChatbot {
       return `Se eu conseguir uma faculdade onde você pode começar a trabalhar nesse prazo, faz sentido para você seguir?`;
     }
 
-    return `Só para eu entender melhor 👇 você prefere começar em 9 meses ou em 1 ano?`;
+    return `Só para eu entender melhor 👇\nvocê prefere começar em 9 meses ou em 1 ano?`;
   }
 
   handleTrabalhoCommit(msg) {
@@ -341,9 +494,9 @@ class SalesChatbot {
     }
 
     if (this.isNegative(msg)) {
-      this.data.microCompromisso = "nao";
+      this.data.microCompromisso = "não";
       this.state = "hesitation";
-      return `Sem problema 😊 o que você gostaria de entender melhor sobre essa possibilidade?`;
+      return `Sem problema 😊 O que você gostaria de entender melhor sobre essa possibilidade?`;
     }
 
     return `Só para confirmar: se eu conseguir uma faculdade com esse prazo, faz sentido para você seguir?`;
@@ -355,11 +508,17 @@ class SalesChatbot {
       msg.includes("quanto menos") ||
       msg.includes("menos presencial") ||
       msg.includes("mais flex") ||
+      msg.includes("mais flexível") ||
       msg.includes("mais flexivel") ||
+      msg.includes("flexível") ||
       msg.includes("flexivel") ||
       msg.includes("quase nada presencial") ||
+      msg.includes("não ir muito") ||
       msg.includes("nao ir muito") ||
-      msg.includes("melhor")
+      msg.includes("o quanto antes") ||
+      msg.includes("quanto antes") ||
+      msg.includes("melhor") ||
+      msg.includes("menos melhor")
     ) {
       this.data.flexibilidade = "mínima presencial";
       this.state = "ask_flexibilidade_commit";
@@ -368,11 +527,17 @@ class SalesChatbot {
 
     if (
       msg.includes("2") ||
+      msg.includes("mês") ||
       msg.includes("mes") ||
-      msg.includes("uma vez por mes") ||
-      msg.includes("1 vez por mes") ||
+      msg.includes("uma vez por mês") ||
+      msg.includes("1 vez por mês") ||
+      msg.includes("1x por mês") ||
       msg.includes("1x por mes") ||
       msg.includes("mensal") ||
+      msg.includes("não precisa ser agora") ||
+      msg.includes("nao precisa ser agora") ||
+      msg.includes("pode ser depois") ||
+      msg.includes("sem pressa") ||
       msg.includes("mais tranquilo")
     ) {
       this.data.flexibilidade = "1x por mês";
@@ -396,6 +561,7 @@ class SalesChatbot {
     if (
       msg.includes("tanto faz") ||
       msg.includes("qualquer um") ||
+      msg.includes("não me importo") ||
       msg.includes("nao me importo") ||
       msg.includes("indiferente")
     ) {
@@ -404,7 +570,7 @@ class SalesChatbot {
       return `Perfeito 👍 então vou considerar uma opção equilibrada e flexível. Faz sentido para você?`;
     }
 
-    return `Só para eu te direcionar melhor 👇 você prefere:\n1. Uma vez por semana\n2. Uma vez por mês\n3. Quanto menos presencial melhor`;
+    return `Só para eu te direcionar melhor 👇\nvocê prefere:\n1. Uma vez por semana\n2. Uma vez por mês\n3. Quanto menos presencial melhor`;
   }
 
   handleFlexibilidadeCommit(msg) {
@@ -415,9 +581,9 @@ class SalesChatbot {
     }
 
     if (this.isNegative(msg)) {
-      this.data.microCompromisso = "nao";
+      this.data.microCompromisso = "não";
       this.state = "hesitation";
-      return `Sem problema 😊 qual nível de flexibilidade faria mais sentido para você?`;
+      return `Sem problema 😊 Qual nível de flexibilidade faria mais sentido para você?`;
     }
 
     return `Só para confirmar: se eu encontrar uma opção com esse nível de flexibilidade, faz sentido para você?`;
@@ -454,22 +620,22 @@ class SalesChatbot {
     const prazo = this.data.prazoTrabalho || "9 meses";
     const flex = this.data.flexibilidade || "mínima presencial";
     const valor = this.data.valor || 500;
-    const processo = this.data.processo || "COS";
 
     return (
       `Perfeito 👀 agora sim encontrei uma oportunidade alinhada com tudo o que você me falou.\n\n` +
-      `Resumo do seu perfil:\n` +
-      `✔ Processo: ${processo}\n` +
+      `Resumo do que faz sentido para você:\n` +
       `✔ Investimento próximo de $${valor}/mês\n` +
       `✔ Possibilidade de trabalho em ${prazo}\n` +
       `✔ Formato de aula com ${flex}\n\n` +
       `Deixa eu te explicar rapidinho como funciona 👇\n\n` +
       `Hoje, no processo seletivo, você pode ter acesso a até 4 opções de bolsas diferentes.\n` +
       `A gente faz essa filtragem com base no seu perfil para encontrar as melhores oportunidades disponíveis no momento.\n\n` +
+      `Por exemplo: já tivemos alunos que entraram com uma opção inicial e acabaram escolhendo entre 3 ou 4 bolsas diferentes, inclusive com valores mais baixos do que esperavam.\n\n` +
       `O processo é simples:\n` +
-      `1. Você faz uma pré-candidatura\n` +
+      `1. Você faz uma pré-candidatura (leva menos de 5 minutos)\n` +
       `2. A gente analisa seu perfil\n` +
       `3. Te apresenta as melhores opções de bolsa, curso e unidade\n\n` +
+      `Isso evita que você escolha errado ou pague mais caro do que deveria.\n\n` +
       `Agora me diz 👇\nFaz sentido para você seguir com essa opção?`
     );
   }
@@ -481,7 +647,7 @@ class SalesChatbot {
       return `Perfeito! Parabéns pela conquista dessa bolsa 🎉\n\nAgora vou te encaminhar um link do processo seletivo para coletar algumas informações e te direcionar com mais precisão nas próximas etapas.\n\nÉ rápido e vai me ajudar a te apresentar as melhores opções de acordo com o seu perfil 👇\n\nDeixe seu contato/telefone. Qualquer esclarecimento entraremos em contato com você para quitar as suas dúvidas.`;
     }
 
-    if (this.isNegative(msg) || msg.includes("duvida")) {
+    if (this.isNegative(msg) || msg.includes("dúvida") || msg.includes("duvida")) {
       this.state = "hesitation";
       return `Sem problema 😊 me fala sua principal dúvida que eu te explico de forma rápida e objetiva.`;
     }
@@ -490,7 +656,7 @@ class SalesChatbot {
   }
 
   handleHesitation(msg) {
-    if (msg.includes("valor") || msg.includes("preco")) {
+    if (msg.includes("valor") || msg.includes("preço") || msg.includes("preco")) {
       this.state = "ask_preco";
       return `Claro 👍 vamos ajustar essa parte.\nQual valor mensal faria mais sentido para você dentro da faixa de $500 a $2000?`;
     }
@@ -507,94 +673,6 @@ class SalesChatbot {
 
     this.state = "offer";
     return `Entendi 😊 me diz o que você gostaria de entender melhor: valor, trabalho ou flexibilidade?`;
-  }
-
-  detectHuman(msg) {
-    return [
-      "humano",
-      "atendente",
-      "pessoa",
-      "especialista",
-      "falar com alguem",
-      "quero falar com alguem",
-      "quero falar com uma pessoa",
-      "nao gostei",
-      "nao quero robo",
-      "reclamacao",
-      "insatisfeito"
-    ].some(t => msg.includes(t));
-  }
-
-  detectWhatsAppRedirect(msg) {
-    return [
-      "quero falar pelo whats",
-      "manda no whats",
-      "me manda no whatsapp",
-      "pelo whatsapp",
-      "whatsapp"
-    ].some(t => msg.includes(t));
-  }
-
-  detectWhatsAppContact(msg) {
-    return [
-      "me chama no whats",
-      "me chama no whatsapp",
-      "me liga no whats",
-      "me liga no whatsapp"
-    ].some(t => msg.includes(t));
-  }
-
-  detectJaECliente(msg) {
-    return [
-      "ja sou cliente",
-      "ja estudo aqui",
-      "ja estudei aqui",
-      "quero falar com a fernanda",
-      "por que tenho que responder tudo de novo",
-      "ja tenho cadastro"
-    ].some(t => msg.includes(t));
-  }
-
-  messageSaysInUSA(msg) {
-    return [
-      "estou nos eua",
-      "ja estou nos eua",
-      "to nos eua",
-      "moro nos eua",
-      "estou aqui nos eua"
-    ].some(t => msg.includes(t)) || (this.isPositive(msg) && this.state === "ask_usa");
-  }
-
-  messageSaysNotInUSA(msg) {
-    return [
-      "nao estou nos eua",
-      "ainda nao estou nos eua",
-      "estou fora dos eua",
-      "moro no brasil",
-      "ainda estou no brasil"
-    ].some(t => msg.includes(t)) || (this.isNegative(msg) && this.state === "ask_usa");
-  }
-
-  messageSaysTransfer(msg) {
-    return [
-      "ja tenho visto de estudante",
-      "tenho visto de estudante",
-      "student visa",
-      "f1",
-      "transfer",
-      "transferencia"
-    ].some(t => msg.includes(t));
-  }
-
-  messageSaysCOS(msg) {
-    return [
-      "preciso mudar de status",
-      "mudar de status",
-      "change of status",
-      "cos",
-      "nao tenho visto de estudante",
-      "quero trocar de status"
-    ].some(t => msg.includes(t));
   }
 
   isPositive(msg) {
@@ -625,13 +703,13 @@ class SalesChatbot {
 
   isNegative(msg) {
     const negatives = [
-      "nao",
       "não",
+      "nao",
       "talvez",
-      "acho que nao",
       "acho que não",
-      "nao sei",
+      "acho que nao",
       "não sei",
+      "nao sei",
       "not",
       "no"
     ];
@@ -642,11 +720,6 @@ class SalesChatbot {
   extractNumber(msg) {
     const match = msg.match(/\d+/);
     return match ? parseInt(match[0], 10) : null;
-  }
-
-  looksLikePhone(raw) {
-    const digits = String(raw || "").replace(/\D/g, "");
-    return digits.length >= 10;
   }
 }
 
